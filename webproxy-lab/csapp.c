@@ -947,16 +947,17 @@ ssize_t Rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen)
  *       -1 with errno set for other errors.
  */
 /* $begin open_clientfd */
+//////////////////////////////////////OPEN_CLIENTFD//////////////////////////////////////////////////////
 int open_clientfd(char *hostname, char *port) {
     int clientfd, rc;
     struct addrinfo hints, *listp, *p;
 
     /* Get a list of potential server addresses */
-    memset(&hints, 0, sizeof(struct addrinfo));
+    memset(&hints, 0, sizeof(struct addrinfo)); //memset() 함수 : 메모리 블록을 특정 값으로 초기화
     hints.ai_socktype = SOCK_STREAM;  /* Open a connection */
     hints.ai_flags = AI_NUMERICSERV;  /* ... using a numeric port arg. */
     hints.ai_flags |= AI_ADDRCONFIG;  /* Recommended for connections */
-    if ((rc = getaddrinfo(hostname, port, &hints, &listp)) != 0) {
+    if ((rc = getaddrinfo(hostname, port, &hints, &listp)) != 0) { //return code = 호스트 이름, 주소, 포트
         fprintf(stderr, "getaddrinfo failed (%s:%s): %s\n", hostname, port, gai_strerror(rc));
         return -2;
     }
@@ -1065,7 +1066,3 @@ int Open_listenfd(char *port)
 }
 
 /* $end csapp.c */
-
-
-
-
