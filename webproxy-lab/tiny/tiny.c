@@ -45,7 +45,7 @@ int main(int argc, char **argv) // 인자수, 인자포인터
     Close(connfd); // line:netp:tiny:close
   }
 }
-
+////////////////////////////////DO IT//////////////////////////////////////////////
 void doit(int fd) //연결 소켓
 {
   int is_static;
@@ -55,16 +55,17 @@ void doit(int fd) //연결 소켓
   rio_t rio;
 
   Rio_readinitb(&rio, fd);
-  Rio_readlineb(fd, buf, MAXLINE);
+  Rio_readlineb(&rio, buf, MAXLINE);
   printf("Request headers:\n");
   printf("%s",buf); // 받은 버퍼확인
-  scanf(buf,"%s %s %s", method, uri, version); // buf에 있는 것들 각 변수에 담아주고
+  sscanf(buf,"%s %s %s", method, uri, version); // buf에 있는 것들 각 변수에 담아주고
 
   if (strcasecmp(method, "GET")) // 메소드 확인 "GET" 아닐 시 ret;
   {
     clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
     return;
   }
+
   read_requesthdrs(&rio);  // 요청 헤더 라인들을 한 줄씩 읽어 소비
 
   is_static = parse_uri(uri, filename, cgiargs); // 정적인지 확인
@@ -92,13 +93,52 @@ void doit(int fd) //연결 소켓
     serve_dynamic(fd, filename, cgiargs);
   }
 }
+////////////////////////////////CLIENT ERROR//////////////////////////////////////////////
+void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg)
+{
+  //ex: clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
+  char buf[MAXLINE], body[MAXBUF];
 
+  /* Build the HTTP response body */
+  sprintf(body, "<html><title>Tiny Error</title>"); //body라는 버퍼안에 넣기 
+  sprintf(body, "%s<body bgcolor=" "ffffff"">\r\n",body);
+  sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
+  sprintf(body, "%s<p>%s: %s\r\n", body, longmsg, cause);
+  sprintf(body, "%s<hr><em>The Tiny Web server</em>\r\n", body);
+
+  /* Print the HTTP response */
+  sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
+  Rio_writen(fd, buf, strlen(buf));
+  sprintf(buf, "Content-type: text/html\r\n");
+  Rio_writen(fd, buf, strlen(buf));
+  sprintf(buf, "Content-length: %d\r\n\r\n", (int)strlen(body));
+  Rio_writen(fd, buf, strlen(buf));
+  Rio_writen(fd, body, strlen(body));
+}
+////////////////////////////////READ_REQUEST_HDRS//////////////////////////////////////////////
+// HTTP 요청 헤더를 읽어들이는 함수입니다.
+void read_requesthdrs(rio_t *rp) // 'rp'는 클라이언트와 연결된 RIO 버퍼(물통)입니다.
+{
+  char buf[MAXLINE]; // HTTP 헤더 한 줄을 임시로 저장할 버퍼
+
+  
+  Rio_readlineb(rp, buf, MAXLINE);  // 요청 라인을 읽어서 buf에 저장
+  printf("%s", buf); // 저장한 요청 라인 출력
+  
+  while (strcmp(buf, "\r\n"))  // 헤더(Header) 읽기 루프 "buf의 내용이 \r\n (빈 줄)이 아닐 동안 계속 반복
+  {
+    Rio_readlineb(rp, buf, MAXLINE); 
+    printf("%s", buf);     // 방금 읽은 헤더 라인을 서버 콘솔 창에 출력합니다.
+  }
+  return; 
+}
+////////////////////////////////PARSE_URI//////////////////////////////////////////////
 int parse_uri(char *uri, char *filename, char *cgiargs) // 로컬 파일 경로(filename)와 CGI 인자(cgiargs)를 채움, 동적.정적 판단 리턴
 {
   char *ptr;
 
   
-  if (!strstr(uri, "cgi-bin")) // 정적 콘텐츠 판단: URI에 "cgi-bin"이 없으면 정적으로 간주
+  if (!strstr(uri, "cgi-bin")) // 정적 콘텐츠 판단: URI에 "cgi-bin"이 없으면 정적으로 간주 (부분집합 포함?)
   { 
     strcpy(cgiargs, "");       
     strcpy(filename, ".");
@@ -127,3 +167,83 @@ int parse_uri(char *uri, char *filename, char *cgiargs) // 로컬 파일 경로(
     return 0;                 // 동적 요청
   }
 }// 반환값: 1 = 정적(static), 0 = 동적(dynamic)
+////////////////////////////////SERVE_STATIC//////////////////////////////////////////////
+void serve_static(int fd, char *filename, int filesize)
+{
+  int srcfd; // 소스 식별자받
+  char *srcp, filetype[MAXLINE]; //소스 포인터, 파일타입 버퍼?
+
+  char buf[MAXBUF];
+  char *p = buf;
+  int n;
+  int remaining = sizeof(buf);
+
+  /* Send response headers to client */
+  get_filetype(filename, filetype); // filetype 버퍼에 타입 저장
+
+  /* Build the HTTP response headers correctly - use separate buffers or append */
+  n = snprintf(p, remaining, "HTTP/1.0 200 OK\r\n"); //p에 글자 삽입 / remaining은 쓸 수 있는 최대 크기
+  p += n;
+  remaining -= n;
+
+  n = snprintf(p, remaining, "Server: Tiny Web Server\r\n");
+  p += n;
+  remaining -= n;
+
+  n = snprintf(p, remaining, "Connection: close\r\n");
+  p += n;
+  remaining -= n;
+
+  n = snprintf(p, remaining, "Content-length: %d\r\n", filesize);
+  p += n;
+  remaining -= n;
+
+  n = snprintf(p, remaining, "Content-type: %s\r\n\r\n", filetype);
+  p += n;
+  remaining -= n;
+
+  Rio_writen(fd, buf, strlen(buf)); // 버퍼 길이 만큼 연결 소켓에 써주기
+  printf("Response headers:\n");
+  printf("%s", buf); // 버퍼 내용 출력 해주고
+
+  /* Send response body to client */
+  srcfd = Open(filename, O_RDONLY, 0); // 요청한 파일을 열기 / O_RDONLY 읽기 전용 / srcfd = 소스 파일 디스크립터
+  srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); // 메모리 맵: 파일을 read해서 메모리로 복사하는 대신 srcfd의 내용물(filesize) 만큼 프로그램의 메모리 주소에 연결(매핑)
+  Close(srcfd); // 메모리 매핑 했으니 닫기
+  Rio_writen(fd, srcp, filesize); //filesize 만큼 전부 전송
+  Munmap(srcp, filesize); // 전송하고나서 unmap
+}
+////////////////////////////////GET_FILETYPE//////////////////////////////////////////////
+void get_filetype(char *filename, char *filetype)
+{
+  if (strstr(filename, ".html"))
+    strcpy(filetype, "text/html");
+  else if (strstr(filename, ".gif"))
+    strcpy(filetype, "image/gif");
+  else if (strstr(filename, ".png"))
+    strcpy(filetype, "image/png");
+  else if (strstr(filename, ".jpg"))
+    strcpy(filetype, "image/jpeg");
+  else
+    strcpy(filetype, "text/plain");
+}
+////////////////////////////////SERVE_DYNAMIC//////////////////////////////////////////////
+void serve_dynamic(int fd, char *filename, char *cgiargs)
+{
+  char buf[MAXLINE], *emptylist[] = { NULL };
+
+  /* Return first part od HTTP response*/
+  sprintf(buf, "HTTP/1.0 200 OK\r\n");
+  Rio_writen(fd, buf, strlen(buf));
+  sprintf(buf, "Server: Tiny Web Server\r\n");
+  Rio_writen(fd, buf, strlen(buf));
+
+  if (Fork() == 0) // 만약 내가 복제본이라면
+  {
+    /* Real server wowuld set all CGI vars here */
+    setenv("QUERY_STRING", cgiargs, 1); // setenv로 추가한 "QUERY_STRING=10&20
+    Dup2(fd, STDOUT_FILENO); // Redirect stdout to client 출력을 클라이언트로만 해준뒤
+    Execve(filename, emptylist, environ); // 파일 name을 실행하는데 environ은 뭐지?
+  }
+  Wait(NULL); // 부모 프로세스는 if 문 건너뛰고
+}

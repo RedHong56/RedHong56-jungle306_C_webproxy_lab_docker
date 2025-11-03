@@ -13,8 +13,8 @@ int main(int argc, char **argv)
     host = argv[1];
     port = argv[2];
 
-    clientfd = Open_clientfd(host, port);
-    Rio_readinitb(&rio, clientfd);
+    clientfd = Open_clientfd(host, port); // 이게 킥임
+    Rio_readinitb(&rio, clientfd); // 클라이언트의 소켓으로 구조체로 넘겨 연결하려고
 
     while (Fgets(buf, MAXLINE, stdin) != NULL) {
         Rio_writen(clientfd, buf, strlen(buf));
@@ -23,3 +23,4 @@ int main(int argc, char **argv)
     }
     Close(clientfd); 
 }
+///////////////////////////////////////////////////////////////////////////////////////
