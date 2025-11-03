@@ -10,13 +10,12 @@
 #include <strings.h>
 
 void doit(int fd);
-void read_requesthdrs(rio_t *rp);
+void read_requesthdrs(rio_t *rp, int *keep_alive);
 int parse_uri(char *uri, char *filename, char *cgiargs);
-void serve_static(int fd, char *filename, int filesize);
+void serve_static(int fd, char *filename, int filesize, int *keep_alive);
 void get_filetype(char *filename, char *filetype);
-void serve_dynamic(int fd, char *filename, char *cgiargs);
-void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
-                 char *longmsg);
+void serve_dynamic(int fd, char *filename, char *cgiargs ,int *keep_alive);
+void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg, int *keep_alive);
 
 int main(int argc, char **argv) // 인자수, 인자포인터
 {
@@ -53,25 +52,35 @@ void doit(int fd) //연결 소켓
   char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
   char filename[MAXLINE], cgiargs[MAXLINE]; //resource 파일 시스템 경로 매핑 문자열 , cgi인자 즉, ? 뒤에 부분 저장 문자열
   rio_t rio;
-
+  int n, keep_alive = 1;
   Rio_readinitb(&rio, fd);
-  Rio_readlineb(&rio, buf, MAXLINE);
-  printf("Request headers:\n");
-  printf("%s",buf); // 받은 버퍼확인
-  sscanf(buf,"%s %s %s", method, uri, version); // buf에 있는 것들 각 변수에 담아주고
+  while (keep_alive)
+  {
+    if(n = Rio_readlineb(&rio, buf, MAXLINE) == 0){
+      printf("Client closed connection.\n");
+      break;
+    }
+    printf("Request headers:\n");
+    printf("%s",buf); // 받은 버퍼확인
+    sscanf(buf,"%s %s %s", method, uri, version); // buf에 있는 것들 각 변수에 담아주고
+    if (strcmp(version, "HTTP/1.0") == 0)
+     keep_alive = 0;
+  }
+  
+  
 
   if (strcasecmp(method, "GET")) // 메소드 확인 "GET" 아닐 시 ret;
   {
-    clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
+    clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method", keep_alive);
     return;
   }
 
-  read_requesthdrs(&rio);  // 요청 헤더 라인들을 한 줄씩 읽어 소비
+  read_requesthdrs(&rio,keep_alive);  // 요청 헤더 라인들을 한 줄씩 읽어 소비
 
   is_static = parse_uri(uri, filename, cgiargs); // 정적인지 확인
   if (stat(filename, &sbuf) < 0)//stat: 메타데이터를 커널에서 조회 -> 경로가 존재하는지, 무엇인지를 확정
   {
-    clienterror(fd, filename, "404", "Not found", "Tiny couldn't read the file"); // 그런 파일 없다~
+    clienterror(fd, filename, "404", "Not found", "Tiny couldn't read the file", keep_alive); // 그런 파일 없다~
     return;
   }
 
@@ -79,22 +88,22 @@ void doit(int fd) //연결 소켓
   {
     if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode))
     {
-      clienterror(fd, filename, "403", "Forbidden", "Tiny couldn’t read the file");
+      clienterror(fd, filename, "403", "Forbidden", "Tiny couldn’t read the file", keep_alive);
       return;
     }
-    serve_static(fd,filename, sbuf.st_size);
+    serve_static(fd,filename, sbuf.st_size, keep_alive);
   }
   else { // 동적 콘텐츠
     if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)) 
     {
-      clienterror(fd, filename, "403", "Forbidden", "Tiny couldn’t run the CGI program");
+      clienterror(fd, filename, "403", "Forbidden", "Tiny couldn’t run the CGI program", keep_alive);
       return;
     }
-    serve_dynamic(fd, filename, cgiargs);
+    serve_dynamic(fd, filename, cgiargs, keep_alive);
   }
 }
 ////////////////////////////////CLIENT ERROR//////////////////////////////////////////////
-void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg)
+void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg, int *keep_alive)
 {
   //ex: clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
   char buf[MAXLINE], body[MAXBUF];
@@ -106,9 +115,23 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
   sprintf(body, "%s<p>%s: %s\r\n", body, longmsg, cause);
   sprintf(body, "%s<hr><em>The Tiny Web server</em>\r\n", body);
 
-  /* Print the HTTP response */
-  sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
-  Rio_writen(fd, buf, strlen(buf));
+
+/* Print the HTTP response */
+  if (*keep_alive)
+  {
+    sprintf(buf, "HTTP/1.1 %s %s\r\n", errnum, shortmsg);
+    Rio_writen(fd, buf, strlen(buf));
+    sprintf(buf, "Connection: keep-alive\r\n"); // <-- 이 줄
+    Rio_writen(fd, buf, strlen(buf));
+  }
+  else
+  {
+    sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
+    Rio_writen(fd, buf, strlen(buf));
+    sprintf(buf, "Connection: close\r\n"); // <-- 이 줄이
+    Rio_writen(fd, buf, strlen(buf));
+  }
+  // --- 공통 헤더 ---
   sprintf(buf, "Content-type: text/html\r\n");
   Rio_writen(fd, buf, strlen(buf));
   sprintf(buf, "Content-length: %d\r\n\r\n", (int)strlen(body));
@@ -117,18 +140,21 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
 }
 ////////////////////////////////READ_REQUEST_HDRS//////////////////////////////////////////////
 // HTTP 요청 헤더를 읽어들이는 함수입니다.
-void read_requesthdrs(rio_t *rp) // 'rp'는 클라이언트와 연결된 RIO 버퍼(물통)입니다.
+void read_requesthdrs(rio_t *rp, int *keep_alive) // 'rp'는 클라이언트와 연결된 RIO 버퍼(물통)입니다.
 {
+  
   char buf[MAXLINE]; // HTTP 헤더 한 줄을 임시로 저장할 버퍼
 
-  
   Rio_readlineb(rp, buf, MAXLINE);  // 요청 라인을 읽어서 buf에 저장
-  printf("%s", buf); // 저장한 요청 라인 출력
+  // printf("%s", buf); // 저장한 요청 라인 출력
   
   while (strcmp(buf, "\r\n"))  // 헤더(Header) 읽기 루프 "buf의 내용이 \r\n (빈 줄)이 아닐 동안 계속 반복
-  {
-    Rio_readlineb(rp, buf, MAXLINE); 
+  {    
     printf("%s", buf);     // 방금 읽은 헤더 라인을 서버 콘솔 창에 출력합니다.
+    if(strstr(buf, "Connection: close")){
+      *keep_alive = 0;
+    }
+    Rio_readlineb(rp, buf, MAXLINE); 
   }
   return; 
 }
@@ -137,7 +163,6 @@ int parse_uri(char *uri, char *filename, char *cgiargs) // 로컬 파일 경로(
 {
   char *ptr;
 
-  
   if (!strstr(uri, "cgi-bin")) // 정적 콘텐츠 판단: URI에 "cgi-bin"이 없으면 정적으로 간주 (부분집합 포함?)
   { 
     strcpy(cgiargs, "");       
@@ -168,7 +193,7 @@ int parse_uri(char *uri, char *filename, char *cgiargs) // 로컬 파일 경로(
   }
 }// 반환값: 1 = 정적(static), 0 = 동적(dynamic)
 ////////////////////////////////SERVE_STATIC//////////////////////////////////////////////
-void serve_static(int fd, char *filename, int filesize)
+void serve_static(int fd, char *filename, int filesize, int *keep_alive)
 {
   int srcfd; // 소스 식별자받
   char *srcp, filetype[MAXLINE]; //소스 포인터, 파일타입 버퍼?
@@ -181,16 +206,31 @@ void serve_static(int fd, char *filename, int filesize)
   /* Send response headers to client */
   get_filetype(filename, filetype); // filetype 버퍼에 타입 저장
 
+  if (*keep_alive) // 1.1 일 때
+  {
+    n = snprintf(p, remaining, "HTTP/1.1 200 OK\r\n"); //p에 글자 삽입 / remaining은 쓸 수 있는 최대 크기
+    p += n;
+    remaining -= n;
+
+    n = snprintf(p, remaining, "Connection: close\r\n");
+    p += n;
+    remaining -= n;
+  }else{
+    n = snprintf(p, remaining, "HTTP/1.0 200 OK\r\n"); //p에 글자 삽입 / remaining은 쓸 수 있는 최대 크기
+    p += n;
+    remaining -= n;
+
+    n = snprintf(p, remaining, "Connection: close\r\n");
+    p += n;
+    remaining -= n;
+  }
+  
+
+
   /* Build the HTTP response headers correctly - use separate buffers or append */
-  n = snprintf(p, remaining, "HTTP/1.0 200 OK\r\n"); //p에 글자 삽입 / remaining은 쓸 수 있는 최대 크기
-  p += n;
-  remaining -= n;
+ 
 
   n = snprintf(p, remaining, "Server: Tiny Web Server\r\n");
-  p += n;
-  remaining -= n;
-
-  n = snprintf(p, remaining, "Connection: close\r\n");
   p += n;
   remaining -= n;
 
@@ -228,15 +268,26 @@ void get_filetype(char *filename, char *filetype)
     strcpy(filetype, "text/plain");
 }
 ////////////////////////////////SERVE_DYNAMIC//////////////////////////////////////////////
-void serve_dynamic(int fd, char *filename, char *cgiargs)
+void serve_dynamic(int fd, char *filename, char *cgiargs, int *keep_alive)
 {
   char buf[MAXLINE], *emptylist[] = { NULL };
 
   /* Return first part od HTTP response*/
-  sprintf(buf, "HTTP/1.0 200 OK\r\n");
-  Rio_writen(fd, buf, strlen(buf));
-  sprintf(buf, "Server: Tiny Web Server\r\n");
-  Rio_writen(fd, buf, strlen(buf));
+if (*keep_alive)
+  {
+    sprintf(buf, "HTTP/1.1 200 OK\r\n");
+    Rio_writen(fd, buf, strlen(buf));
+    sprintf(buf, "Server: Tiny Web Server\r\n");
+    Rio_writen(fd, buf, strlen(buf));
+    sprintf(buf, "Connection: keep-alive\r\n"); 
+    Rio_writen(fd, buf, strlen(buf));
+  }else{
+    sprintf(buf, "HTTP/1.0 200 OK\r\n");
+    Rio_writen(fd, buf, strlen(buf));
+    sprintf(buf, "Server: Tiny Web Server\r\n");
+    Rio_writen(fd, buf, strlen(buf));
+    sprintf(buf, "Connection: close\r\n"); 
+    Rio_writen(fd, buf, strlen(buf));
 
   if (Fork() == 0) // 만약 내가 복제본이라면
   {
@@ -247,3 +298,4 @@ void serve_dynamic(int fd, char *filename, char *cgiargs)
   }
   Wait(NULL); // 부모 프로세스는 if 문 건너뛰고
 }
+
