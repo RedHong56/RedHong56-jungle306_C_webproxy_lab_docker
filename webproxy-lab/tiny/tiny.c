@@ -35,8 +35,7 @@ int main(int argc, char **argv) // 인자수, 인자포인터
   while (1)
   {
     clientlen = sizeof(clientaddr);
-    connfd = Accept(listenfd, (SA *)&clientaddr,
-                    &clientlen); // line:netp:tiny:accept
+    connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen); // line:netp:tiny:accept
     Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE,
                 0);
     printf("Accepted connection from (%s, %s)\n", hostname, port);
@@ -65,7 +64,6 @@ void doit(int fd) //연결 소켓
     sscanf(buf,"%s %s %s", method, uri, version); // buf에 있는 것들 각 변수에 담아주고
     if (strcmp(version, "HTTP/1.0") == 0)
       keep_alive = 0; // 종료
-
 
     if (strcasecmp(method, "GET") && strcasecmp(method, "HEAD") ) // 메소드 확인 "GET" 아닐 시 ret;
   {
@@ -248,13 +246,13 @@ void serve_static(int fd, char *filename, int filesize, int *keep_alive, char *m
   if (strcasecmp(method, "GET") == 0)
   {
     srcfd = Open(filename, O_RDONLY, 0); // 요청한 파일을 열기 / O_RDONLY 읽기 전용 / srcfd = 소스 파일 디스크립터
-    // srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); // 메모리 맵: 파일을 read해서 메모리로 복사하는 대신 srcfd의 내용물(filesize) 만큼 프로그램의 메모리 주소에 연결(매핑)
-    char *alloc = calloc(filesize, 1);
-    Rio_readn(srcfd, alloc, filesize);
+    srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); // 메모리 맵: 파일을 read해서 메모리로 복사하는 대신 srcfd의 내용물(filesize) 만큼 프로그램의 메모리 주소에 연결(매핑)
+    // char *alloc = calloc(filesize, 1);
+    Rio_readn(srcfd, srcp, filesize);
     Close(srcfd); // 메모리 매핑 했으니 닫기
-    Rio_writen(fd, alloc, filesize); //filesize 만큼 전부 전송
-    // Munmap(srcp, filesize); // 전송하고나서 unmap
-    free(alloc);
+    Rio_writen(fd, srcp, filesize); //filesize 만큼 전부 전송
+    Munmap(srcp, filesize); // 전송하고나서 unmap
+    // free(alloc);
   }
 }
 ////////////////////////////////GET_FILETYPE//////////////////////////////////////////////
