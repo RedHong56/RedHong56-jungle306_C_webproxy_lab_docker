@@ -65,6 +65,7 @@ void doit(int fd){
   hostname[hostlen]= '\0';
   port[portlen]= '\0';
   path[pathlen]= '\0';
+  printf("host: %s, port: %s, path: %s", hostname, port, path);
 
   // 3. 원격 서버 접속 (Open_clientfd 호출)
   server_fd = open_clientfd(hostname, port);
@@ -89,12 +90,23 @@ void doit(int fd){
   }
 }
 
+void *thread(void *vargp) // 인자 상자에서 열어서 처리
+{
+  int connfd = *((int*)vargp);
+  Pthread_detach(pthread_self()); // 메인 스레드와 분리하고 자동 회수 -> 메모리 누스 방지
+  Free(vargp); // 메-누
+  doit(connfd); // 중계 렛고
+  Close(connfd); // 작업 후 닫기
+  return NULL;
+}
+
 int main(int argc, char **argv)
 {
   int listen_fd, conn_fd;
   socklen_t client_len;
   struct sockaddr_storage clientaddr;
   char client_host[MAXLINE], client_port[MAXLINE];
+  pthread_t tid; //Thread ID
   // char *server_host[MAXLINE], *server_port[MAXLINE], *server_path[MAXLINE], buf[MAXLINE];
   if (argc != 2) {
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
@@ -108,8 +120,11 @@ int main(int argc, char **argv)
     conn_fd = Accept(listen_fd, (SA *)&clientaddr, &client_len); //clientaddr update
     Getnameinfo((SA *)&clientaddr, client_len, client_host, MAXLINE, client_port, MAXLINE, 0);
     printf("Accepted connection from (%s, %s)\n", client_host, client_port);
-    doit(conn_fd);
-    Close(conn_fd); 
+    // doit(conn_fd);
+    // Close(conn_fd); 
+    int *conn_fd_ptr = malloc(sizeof(int));
+    *conn_fd_ptr = conn_fd;
+    Pthread_create(&tid, NULL, thread, conn_fd_ptr);
   }
   printf("%s", user_agent_hdr);
   return 0;
